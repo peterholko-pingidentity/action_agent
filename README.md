@@ -4,7 +4,7 @@ The Action Agent is a component of the Identity-Aware AI Access Broker multi-age
 
 ## Overview
 
-The Action Agent receives instructions from the Coordinator Agent and executes identity operations through MCP (Model Context Protocol) servers:
+The Action Agent receives conversational context from a Chat Agent via A2A (Agent-to-Agent) protocol and executes identity operations through MCP (Model Context Protocol) servers:
 
 - **PingOne MCP Server**: Manages PingOne identity operations
 - **Microsoft Graph MCP Server**: Manages Microsoft 365 identity and access operations
@@ -12,12 +12,17 @@ The Action Agent receives instructions from the Coordinator Agent and executes i
 ## Architecture
 
 ```
+┌──────────────┐
+│  User Input  │
+└──────┬───────┘
+       │
+       ▼
 ┌─────────────────────┐
-│ Coordinator Agent   │
-│  (orchestration)    │
+│   Chat Agent        │
+│ (user interaction)  │
 └──────────┬──────────┘
            │
-           │ Instructions
+           │ A2A Protocol
            ▼
 ┌─────────────────────┐
 │   Action Agent      │
@@ -34,6 +39,7 @@ The Action Agent receives instructions from the Coordinator Agent and executes i
 
 ## Features
 
+- **A2A Protocol**: Exposes as A2A server for inter-agent communication
 - **Multi-System Integration**: Seamlessly operates across PingOne and Microsoft 365
 - **Model-Agnostic**: Supports AWS Bedrock, Anthropic, OpenAI, and other LLM providers
 - **MCP Native**: Direct integration with MCP servers for tool discovery
@@ -77,6 +83,14 @@ The Action Agent receives instructions from the Coordinator Agent and executes i
    uvx msgraph-mcp-server
    ```
 
+5. **Start the Action Agent A2A server**:
+
+   ```bash
+   python action_agent.py
+   ```
+
+   This starts the A2A server on `http://127.0.0.1:9000` (configurable via environment variables)
+
 ## Configuration
 
 Edit the `.env` file to configure your Action Agent:
@@ -91,6 +105,11 @@ MODEL_TEMPERATURE=0.3
 AWS_REGION=us-east-1
 AWS_PROFILE=default
 
+# A2A Server Configuration
+A2A_HOST=127.0.0.1
+A2A_PORT=9000
+# A2A_HTTP_URL=https://action-agent.example.com  # Optional
+
 # MCP Server Commands
 PINGONE_MCP_COMMAND=uvx
 PINGONE_MCP_ARGS=pingone-mcp-server
@@ -101,25 +120,42 @@ MSGRAPH_MCP_ARGS=msgraph-mcp-server
 
 ## Usage
 
-### Basic Usage
+### Starting the Action Agent Server
+
+```bash
+# Start the A2A server
+python action_agent.py
+```
+
+The Action Agent will start an A2A server and wait for requests from the Chat Agent.
+
+### Chat Agent Integration (A2A Client)
+
+The Chat Agent communicates with the Action Agent using A2A protocol:
 
 ```python
-from action_agent import ActionAgent
+from strands import Agent
+from strands_tools.a2a_client import A2AClientToolProvider
 
-# Initialize the agent
-agent = ActionAgent(
-    model_provider="bedrock",
-    model_id="us.amazon.nova-pro-v1:0",
-    temperature=0.3
+# Connect to Action Agent
+a2a_provider = A2AClientToolProvider(
+    known_agent_urls=["http://127.0.0.1:9000"]
 )
 
-# Execute an instruction
-response = agent.execute(
-    "Create user john.doe@example.com with role Sales Representative"
+# Create Chat Agent with Action Agent tools
+chat_agent = Agent(
+    name="Chat Agent",
+    tools=a2a_provider.tools,
+    system_prompt="You help users with identity and access management..."
 )
 
-print(response)
+# User request flows through Chat Agent to Action Agent
+response = await chat_agent.async_call(
+    "Create user john.doe@example.com for the Sales team"
+)
 ```
+
+See `chat_agent_example.py` for complete examples.
 
 ### Example Instructions
 

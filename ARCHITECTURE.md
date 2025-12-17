@@ -16,10 +16,13 @@ The Action Agent is the execution component of the Identity-Aware AI Access Brok
          │                        │                        │
          ▼                        ▼                        ▼
 ┌─────────────────┐      ┌─────────────────┐     ┌─────────────────┐
-│  Coordinator    │      │  Policy Agent   │     │  Action Agent   │
-│     Agent       │─────▶│  (validation)   │────▶│ (THIS COMPONENT)│
-│ (orchestration) │      │                 │     │                 │
-└─────────────────┘      └─────────────────┘     └────────┬────────┘
+│   Chat Agent    │      │  Policy Agent   │     │  Action Agent   │
+│ (user input)    │──A2A─▶  (validation)   │     │ (THIS COMPONENT)│
+│                 │      │                 │     │    (A2A Server) │
+└─────────┬───────┘      └─────────────────┘     └────────┬────────┘
+          │                                               │
+          │                                               │
+          └──────────────A2A Protocol─────────────────────┘
                                                            │
                               ┌────────────────────────────┼────────────┐
                               │                            │            │
@@ -44,17 +47,20 @@ The main class that encapsulates all functionality:
 
 ```python
 class ActionAgent:
-    - __init__(model_provider, model_id, temperature)
+    - __init__(model_provider, model_id, temperature, name, version)
     - _initialize_mcp_clients()
     - _initialize_agent()
+    - _initialize_a2a_server()
     - execute(instruction) -> str
     - execute_async(instruction) -> str
+    - serve(host, port, http_url)
 ```
 
 **Responsibilities:**
 - Initialize and manage MCP client connections
 - Configure the Strands agent with appropriate tools
-- Execute instructions synchronously or asynchronously
+- Expose A2A server for inter-agent communication
+- Execute instructions from Chat Agent via A2A protocol
 - Coordinate between multiple identity systems
 
 ### 2. MCP Client Management
@@ -103,38 +109,53 @@ Supports multiple LLM providers through Strands SDK:
 ### Typical Request Flow
 
 ```
-1. Coordinator Agent
+1. User → Chat Agent
    │
-   ├─▶ Validates requester identity
-   ├─▶ Consults Policy Agent
-   └─▶ Gets approvals (if needed)
+   └─▶ User inputs natural language request
        │
        ▼
-2. Action Agent (receives instruction)
+2. Chat Agent
+   │
+   ├─▶ Processes conversational context
+   ├─▶ Determines need for identity operations
+   └─▶ Sends to Action Agent via A2A
+       │
+       ▼
+3. Action Agent (receives via A2A)
    │
    ├─▶ Validates request structure
    ├─▶ Loads appropriate MCP tools
    └─▶ LLM determines execution plan
        │
        ▼
-3. MCP Server(s)
+4. MCP Server(s)
    │
    ├─▶ Executes API calls
    ├─▶ Handles authentication
    └─▶ Returns results
        │
        ▼
-4. Action Agent
+5. Action Agent
    │
    ├─▶ Logs all actions
    ├─▶ Aggregates results
-   └─▶ Returns to Coordinator
+   └─▶ Returns to Chat Agent via A2A
+       │
+       ▼
+6. Chat Agent
+   │
+   └─▶ Formats user-friendly response
 ```
 
 ### Example: New Employee Onboarding
 
 ```
-Coordinator: "Onboard new.employee@example.com as Sales Rep"
+User: "I need to onboard Sarah Johnson as a Marketing Manager"
+    │
+    ▼
+Chat Agent: (via A2A to Action Agent)
+    "Create user sarah.johnson@example.com with role Marketing Manager,
+     assign to Marketing Team, grant E3 license"
     │
     ▼
 Action Agent:
@@ -151,13 +172,16 @@ Action Agent:
     ├─▶ MS Graph MCP: assign_license("E3")
     │   └─▶ ✓ License assigned
     │
-    ├─▶ MS Graph MCP: add_to_group("Sales Team")
+    ├─▶ MS Graph MCP: add_to_group("Marketing Team")
     │   └─▶ ✓ Added to group
     │
-    └─▶ log_action("onboard", "new.employee@...", "success")
+    └─▶ log_action("onboard", "sarah.johnson@...", "success")
         └─▶ ✓ Logged
-
-    Returns: "Successfully onboarded new.employee@example.com"
+    │
+    ▼ (Returns via A2A)
+Chat Agent: "✓ Successfully onboarded Sarah Johnson!
+            Created accounts in PingOne and Microsoft 365,
+            assigned to Marketing Team, granted E3 license."
 ```
 
 ## Security Architecture
@@ -227,36 +251,34 @@ Robust error handling at multiple levels:
 
 ## Integration Points
 
-### With Coordinator Agent
+### With Chat Agent (A2A Protocol)
 
-**Input Format:**
-```json
-{
-  "request_id": "REQ-2024-001",
-  "requester": "hr@example.com",
-  "approval_id": "APR-2024-123",
-  "action": "onboard_employee",
-  "parameters": {...},
-  "signature": "cryptographic_signature"
-}
+**Chat Agent Setup:**
+```python
+from strands import Agent
+from strands_tools.a2a_client import A2AClientToolProvider
+
+# Connect to Action Agent
+a2a_provider = A2AClientToolProvider(
+    known_agent_urls=["http://127.0.0.1:9000"]
+)
+
+# Chat Agent automatically gets Action Agent tools
+chat_agent = Agent(
+    name="Chat Agent",
+    tools=a2a_provider.tools
+)
 ```
 
-**Output Format:**
-```json
-{
-  "request_id": "REQ-2024-001",
-  "status": "success",
-  "actions_taken": [
-    {
-      "action": "create_user",
-      "system": "pingone",
-      "result": "success",
-      "resource_id": "usr_abc123"
-    }
-  ],
-  "timestamp": "2024-01-15T10:35:00Z"
-}
-```
+**Communication Flow:**
+1. Chat Agent receives user input
+2. Chat Agent sends natural language request to Action Agent via A2A
+3. Action Agent executes operations via MCP servers
+4. Action Agent returns structured results via A2A
+5. Chat Agent formats user-friendly response
+
+**A2A Message Format:**
+The A2A protocol handles message serialization automatically. Chat Agent sends natural language text, and Action Agent responds with execution results.
 
 ### With Policy Agent
 
