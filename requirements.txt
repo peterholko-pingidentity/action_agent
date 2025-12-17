@@ -1,11 +1,8 @@
 # Strands SDK for building AI agents
 strands>=0.1.0
 
-# Strands tools (includes A2A client)
+# Strands tools (includes A2A client for Chat Agent integration)
 strands-tools>=0.1.0
-
-# MCP (Model Context Protocol) support
-mcp>=0.1.0
 
 # HTTP client for A2A communication
 httpx>=0.27.0
@@ -17,3 +14,6 @@ botocore>=1.34.0
 # Additional utilities
 python-dotenv>=1.0.0
 pydantic>=2.0.0
+
+# MCP (Model Context Protocol) support - will be added when MCP servers are ready
+# mcp>=0.1.0

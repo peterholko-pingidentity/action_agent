@@ -2,8 +2,8 @@
 Action Agent - Identity & Access Management Executor
 
 This agent handles identity and access management operations by interfacing with:
-- PingOne MCP Server: For PingOne identity operations
-- Microsoft Graph MCP Server: For Microsoft 365 identity and access operations
+- PingOne MCP Server: For PingOne identity operations (TO BE ADDED)
+- Microsoft Graph MCP Server: For Microsoft 365 identity and access operations (TO BE ADDED)
 
 The Action Agent receives conversational context from a Chat Agent via A2A protocol
 and executes the necessary operations across identity systems.
@@ -13,18 +13,19 @@ Architecture:
 """
 
 import os
-import asyncio
-from typing import List, Optional, Dict, Any
+import logging
+from typing import Optional, Dict, Any
 from dotenv import load_dotenv
 
 from strands import Agent, tool
-from strands.tools.mcp import MCPClient
 from strands.multiagent.a2a import A2AServer
-from mcp import stdio_client, StdioServerParameters
-
 
 # Load environment variables
 load_dotenv()
+
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 
 class ActionAgent:
@@ -43,10 +44,11 @@ class ActionAgent:
         model_id: Optional[str] = None,
         temperature: float = 0.3,
         name: str = "Action Agent",
-        version: str = "1.0.0"
+        version: str = "1.0.0",
+        description: str = "An identity and access management executor that performs operations on PingOne and Microsoft Graph"
     ):
         """
-        Initialize the Action Agent with model configuration and MCP clients.
+        Initialize the Action Agent with model configuration.
 
         Args:
             model_provider: The LLM provider to use (bedrock, anthropic, openai, etc.)
@@ -54,52 +56,25 @@ class ActionAgent:
             temperature: Temperature setting for model responses
             name: Name of the agent for A2A identification
             version: Version of the agent for A2A
+            description: Description of the agent's capabilities
         """
         self.model_provider = model_provider
         self.model_id = model_id or os.getenv("MODEL_ID", "us.amazon.nova-pro-v1:0")
         self.temperature = temperature
         self.name = name
         self.version = version
+        self.description = description
 
-        # Initialize MCP clients
-        self.pingone_client = None
-        self.msgraph_client = None
         self.agent = None
         self.a2a_server = None
 
-        self._initialize_mcp_clients()
         self._initialize_agent()
         self._initialize_a2a_server()
 
-    def _initialize_mcp_clients(self):
-        """Initialize MCP clients for PingOne and Microsoft Graph."""
-
-        # PingOne MCP Client
-        pingone_command = os.getenv("PINGONE_MCP_COMMAND", "uvx")
-        pingone_args = os.getenv("PINGONE_MCP_ARGS", "pingone-mcp-server").split()
-
-        self.pingone_client = MCPClient(
-            lambda: stdio_client(StdioServerParameters(
-                command=pingone_command,
-                args=pingone_args
-            ))
-        )
-
-        # Microsoft Graph MCP Client
-        msgraph_command = os.getenv("MSGRAPH_MCP_COMMAND", "uvx")
-        msgraph_args = os.getenv("MSGRAPH_MCP_ARGS", "msgraph-mcp-server").split()
-
-        self.msgraph_client = MCPClient(
-            lambda: stdio_client(StdioServerParameters(
-                command=msgraph_command,
-                args=msgraph_args
-            ))
-        )
-
     def _initialize_agent(self):
-        """Initialize the Strands agent with tools from MCP servers."""
+        """Initialize the Strands agent with tools."""
 
-        # Collect all tools from MCP servers
+        # Collect all tools
         all_tools = []
 
         # Add custom tools for coordination and logging
@@ -107,6 +82,13 @@ class ActionAgent:
             self._create_log_action_tool(),
             self._create_validate_request_tool()
         ])
+
+        # TODO: Add MCP tools here when PingOne and Microsoft Graph MCP servers are ready
+        # Example:
+        # pingone_tools = pingone_mcp_client.list_tools_sync()
+        # msgraph_tools = msgraph_mcp_client.list_tools_sync()
+        # all_tools.extend(pingone_tools)
+        # all_tools.extend(msgraph_tools)
 
         # System prompt for the Action Agent
         system_prompt = """You are the Action Agent, an identity and access management executor.
@@ -118,7 +100,7 @@ Your role:
 - Log all actions for audit compliance
 - Return clear, concise results
 
-Available systems:
+Available systems (will be available when MCP servers are connected):
 - PingOne: User management, groups, roles, authentication policies
 - Microsoft Graph: Microsoft 365 users, groups, licenses, SharePoint, Teams
 
@@ -127,6 +109,9 @@ Always:
 2. Log all actions with appropriate details
 3. Provide clear success/failure messages
 4. Include relevant resource IDs in responses
+
+For now, you can respond to requests and demonstrate your capabilities, but actual
+identity operations will be available once the MCP servers are connected.
 """
 
         # Initialize the Strands agent
@@ -139,6 +124,7 @@ Always:
             )
             self.agent = Agent(
                 name=self.name,
+                description=self.description,
                 model=model,
                 tools=all_tools,
                 system_prompt=system_prompt
@@ -147,9 +133,12 @@ Always:
             # Use default model provider
             self.agent = Agent(
                 name=self.name,
+                description=self.description,
                 tools=all_tools,
                 system_prompt=system_prompt
             )
+
+        logger.info(f"✓ Initialized {self.name} with {len(all_tools)} tools")
 
     def _initialize_a2a_server(self):
         """Initialize the A2A server to expose this agent for inter-agent communication."""
@@ -159,6 +148,8 @@ Always:
             agent=self.agent,
             version=self.version
         )
+
+        logger.info(f"✓ Initialized A2A server (version {self.version})")
 
     @staticmethod
     def _create_log_action_tool():
@@ -185,7 +176,7 @@ Always:
                 "details": details or {}
             }
             # In production, this would write to a proper audit log
-            print(f"[ACTION LOG] {log_entry}")
+            logger.info(f"[ACTION LOG] {log_entry}")
             return f"Action logged: {action} on {target} - {result}"
 
         return log_action
@@ -210,7 +201,8 @@ Always:
             required_fields = {
                 "create_user": ["email", "first_name", "last_name"],
                 "grant_access": ["user_id", "resource_id"],
-                "assign_group": ["user_id", "group_id"]
+                "assign_group": ["user_id", "group_id"],
+                "assign_license": ["user_id", "license_type"]
             }
 
             if request_type not in required_fields:
@@ -237,63 +229,6 @@ Always:
 
         return validate_request
 
-    def execute(self, instruction: str) -> str:
-        """
-        Execute an instruction from the Coordinator Agent.
-
-        Args:
-            instruction: The instruction to execute (e.g., "Create user john.doe@example.com")
-
-        Returns:
-            Result of the execution
-        """
-        if not self.agent:
-            return "Error: Agent not initialized"
-
-        # Execute the instruction using the agent
-        with self.pingone_client, self.msgraph_client:
-            # Get tools from MCP servers
-            pingone_tools = self.pingone_client.list_tools_sync()
-            msgraph_tools = self.msgraph_client.list_tools_sync()
-
-            # Add MCP tools to agent
-            self.agent.tools.extend(pingone_tools)
-            self.agent.tools.extend(msgraph_tools)
-
-            # Execute instruction
-            response = self.agent(instruction)
-
-            return response
-
-    async def execute_async(self, instruction: str) -> str:
-        """
-        Asynchronously execute an instruction from the Coordinator Agent.
-
-        Args:
-            instruction: The instruction to execute
-
-        Returns:
-            Result of the execution
-        """
-        if not self.agent:
-            return "Error: Agent not initialized"
-
-        # Execute the instruction asynchronously
-        async with self.pingone_client, self.msgraph_client:
-            # Get tools from MCP servers
-            pingone_tools = await self.pingone_client.list_tools()
-            msgraph_tools = await self.msgraph_client.list_tools()
-
-            # Add MCP tools to agent
-            self.agent.tools.extend(pingone_tools)
-            self.agent.tools.extend(msgraph_tools)
-
-            # Execute instruction
-            response = await self.agent.async_call(instruction)
-
-            return response
-
-
     def serve(
         self,
         host: str = "127.0.0.1",
@@ -311,18 +246,24 @@ Always:
         if not self.a2a_server:
             raise RuntimeError("A2A server not initialized")
 
-        print(f"Starting Action Agent A2A Server...")
-        print(f"  Name: {self.name}")
-        print(f"  Version: {self.version}")
+        print("\n" + "=" * 70)
+        print(f"  {self.name} - A2A Server")
+        print("=" * 70)
+        print(f"\n  Version: {self.version}")
         print(f"  Address: http://{host}:{port}")
         if http_url:
             print(f"  Public URL: {http_url}")
-        print(f"\nAction Agent is ready to receive requests from Chat Agent via A2A protocol.")
-        print(f"\nAvailable capabilities:")
-        print(f"  - PingOne user and group management")
-        print(f"  - Microsoft 365 identity operations")
-        print(f"  - License and access management")
-        print(f"  - Audit logging and validation")
+        print(f"\n  Status: Ready to receive requests from Chat Agent")
+        print(f"\n  Available capabilities:")
+        print(f"    • Request validation")
+        print(f"    • Action logging and audit trail")
+        print(f"    • Conversational interface")
+        print(f"\n  Pending integrations:")
+        print(f"    ○ PingOne MCP Server (in development)")
+        print(f"    ○ Microsoft Graph MCP Server (in development)")
+        print("\n" + "=" * 70)
+        print(f"  Listening for A2A requests...")
+        print("=" * 70 + "\n")
 
         # Start the A2A server
         self.a2a_server.serve(host=host, port=port, http_url=http_url)
@@ -334,11 +275,6 @@ def main():
 
     Starts the A2A server to receive requests from Chat Agent.
     """
-    print("=" * 70)
-    print("  Action Agent - Identity & Access Management Executor")
-    print("  A2A Protocol Enabled")
-    print("=" * 70)
-
     # Get configuration from environment
     host = os.getenv("A2A_HOST", "127.0.0.1")
     port = int(os.getenv("A2A_PORT", "9000"))
