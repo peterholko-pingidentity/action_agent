@@ -50,7 +50,7 @@ def validate_request(request_type: str, data: dict) -> dict:
 # MCP client setup
 # -------------------------------------------------------------------
 
-PINGONE_MCP_URL = os.getenv("PINGONE_MCP_URL", "http://localhost:8001/mcp")
+PINGONE_MCP_URL = "http://44.220.44.128:8000/mcp"
 MSGRAPH_MCP_URL = "http://100.28.229.240:8000/mcp"
 
 if not MSGRAPH_MCP_URL:
