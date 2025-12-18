@@ -45,7 +45,24 @@ def validate_request(request_type: str, data: dict) -> dict:
 
     return {"valid": True}
 
+@tool
+def decode_jwt(token: str):
+    header_b64, payload_b64, *_ = token.split(".")
 
+    def decode(segment):
+        # Add padding if needed (Base64URL requires padding to be correct length)
+        padding = '=' * (-len(segment) % 4)
+        segment += padding
+        
+        # Base64URL decode
+        decoded_bytes = base64.urlsafe_b64decode(segment)
+        return json.loads(decoded_bytes.decode("utf-8"))
+
+    return {
+        "header": decode(header_b64),
+        "payload": decode(payload_b64)
+    }
+    
 # -------------------------------------------------------------------
 # MCP client setup
 # -------------------------------------------------------------------
@@ -147,6 +164,7 @@ async def lifespan(app: FastAPI):
         msgraph_mcp_client.__exit__(None, None, None)
         pingone_mcp_client.__exit__(None, None, None)
         print("MCP client sessions closed")
+
 
 
 # -------------------------------------------------------------------
