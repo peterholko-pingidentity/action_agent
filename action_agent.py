@@ -10,7 +10,9 @@ from strands import Agent, tool
 from strands.multiagent.a2a import A2AServer
 from strands.tools.mcp import MCPClient
 from mcp.client.sse import sse_client
-
+from mcp.client.streamable_http import streamable_http_client
+import uvicorn  
+from fastapi import FastAPI  
 
 # -------------------------------------------------------------------
 # Helper tools
@@ -47,36 +49,48 @@ def validate_request(request_type: str, data: dict) -> dict:
 # MCP client setup
 # -------------------------------------------------------------------
 
-PINGONE_MCP_URL = os.getenv("PINGONE_MCP_URL")
-MSGRAPH_MCP_URL = os.getenv("MSGRAPH_MCP_URL")
+#PINGONE_MCP_URL = os.getenv("PINGONE_MCP_URL")
+MSGRAPH_MCP_URL = "http://100.28.229.240:8000/mcp"
 
-if not PINGONE_MCP_URL or not MSGRAPH_MCP_URL:
+if not MSGRAPH_MCP_URL:
     raise RuntimeError(
         "PINGONE_MCP_URL and MSGRAPH_MCP_URL must be set in environment"
     )
 
 
 # Create MCP clients with HTTP transport
-pingone_client = MCPClient(lambda: sse_client(PINGONE_MCP_URL))
-msgraph_client = MCPClient(lambda: sse_client(MSGRAPH_MCP_URL))
+#pingone_client = MCPClient(lambda: sse_client(PINGONE_MCP_URL))
+#msgraph_client = MCPClient(lambda: sse_client(MSGRAPH_MCP_URL))
 
+
+streamable_http_mcp_client = MCPClient(
+    lambda: streamable_http_client(MSGRAPH_MCP_URL)
+)
 
 # Load tools from MCP servers
-with pingone_client, msgraph_client:
-    pingone_tools = pingone_client.list_tools_sync()
-    msgraph_tools = msgraph_client.list_tools_sync()
+try :
+    with streamable_http_mcp_client:
+        print("Hello")
+        msgraph_tools = streamable_http_mcp_client.list_tools_sync()
+        
+except Exception as e: 
+    print("Error entering MCP client:", e)
 
 
 # -------------------------------------------------------------------
 # Create Action Agent
 # -------------------------------------------------------------------
 
+
 all_tools = [
     log_action,
     validate_request,
-    *pingone_tools,
+    #*pingone_tools,
     *msgraph_tools,
 ]
+
+print(all_tools)
+runtime_url = os.environ.get('AGENTCORE_RUNTIME_URL', 'http://127.0.0.1:9000/')  
 
 agent = Agent(
     name="Action Agent",
@@ -94,21 +108,18 @@ agent = Agent(
     ),
 )
 
-a2a_server = A2AServer(agent=agent, version="1.0.0")
+host, port = "0.0.0.0", 9000  
+
+a2a_server = A2AServer(agent=agent, http_url=runtime_url, serve_at_root=True, version="1.0.0")
 
 
-# -------------------------------------------------------------------
-# Start server
-# -------------------------------------------------------------------
+app = FastAPI()  
 
-if __name__ == "__main__":
-    host = os.getenv("A2A_HOST", "127.0.0.1")
-    port = int(os.getenv("A2A_PORT", "9000"))
+@app.get("/ping")  
+def ping():  
+    return {"status": "healthy"}  
 
-    print(f"\nAction Agent A2A Server")
-    print(f"Address: http://{host}:{port}")
-    print(f"PingOne MCP: {PINGONE_MCP_URL}")
-    print(f"MS Graph MCP: {MSGRAPH_MCP_URL}")
-    print(f"Tools loaded: {len(all_tools)}\n")
+app.mount("/", a2a_server.to_fastapi_app())  
 
-    a2a_server.serve(host=host, port=port)
+if __name__ == "__main__":  
+    uvicorn.run(app, host=host, port=port)
