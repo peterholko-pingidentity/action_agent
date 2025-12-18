@@ -1,7 +1,8 @@
 """
-Action Agent - Identity & Access Management A2A Server
+Action Agent - Identity & Access Management Agent
 
-- Receives conversational context from a Chat Agent via A2A
+- Deployable to AWS Bedrock AgentCore Runtime
+- Can also run as an A2A Server for local development
 - Uses MCP tools from PingOne and Microsoft Graph MCP servers
 """
 
@@ -11,6 +12,14 @@ from strands.multiagent.a2a import A2AServer
 from strands.tools.mcp import MCPClient
 from mcp.client.sse import sse_client
 from mcp.client.streamable_http import streamable_http_client
+
+# Import Bedrock AgentCore for serverless deployment
+try:
+    from bedrock_agentcore import BedrockAgentCoreApp
+    AGENTCORE_AVAILABLE = True
+except ImportError:
+    AGENTCORE_AVAILABLE = False
+    print("Warning: bedrock_agentcore not installed. AgentCore deployment unavailable.")
 
 
 # -------------------------------------------------------------------
@@ -49,31 +58,38 @@ def validate_request(request_type: str, data: dict) -> dict:
 # -------------------------------------------------------------------
 
 #PINGONE_MCP_URL = os.getenv("PINGONE_MCP_URL")
-MSGRAPH_MCP_URL = "http://100.28.229.240:8000/mcp"
+MSGRAPH_MCP_URL = os.getenv("MSGRAPH_MCP_URL", "http://100.28.229.240:8000/mcp")
 
 if not MSGRAPH_MCP_URL:
     raise RuntimeError(
-        "PINGONE_MCP_URL and MSGRAPH_MCP_URL must be set in environment"
+        "MSGRAPH_MCP_URL must be set in environment"
     )
 
 
-# Create MCP clients with HTTP transport
-#pingone_client = MCPClient(lambda: sse_client(PINGONE_MCP_URL))
-#msgraph_client = MCPClient(lambda: sse_client(MSGRAPH_MCP_URL))
+def get_mcp_tools():
+    """Lazy-load MCP tools - called on-demand for Lambda cold start optimization."""
+    # Create MCP clients with HTTP transport
+    #pingone_client = MCPClient(lambda: sse_client(PINGONE_MCP_URL))
+    #msgraph_client = MCPClient(lambda: sse_client(MSGRAPH_MCP_URL))
+
+    streamable_http_mcp_client = MCPClient(
+        lambda: streamable_http_client(MSGRAPH_MCP_URL)
+    )
+
+    # Load tools from MCP servers
+    try:
+        with streamable_http_mcp_client:
+            print(f"Connecting to MS Graph MCP at {MSGRAPH_MCP_URL}")
+            msgraph_tools = streamable_http_mcp_client.list_tools_sync()
+            print(f"Loaded {len(msgraph_tools)} tools from MS Graph MCP")
+            return msgraph_tools
+    except Exception as e:
+        print(f"Error loading MCP tools: {e}")
+        return []
 
 
-streamable_http_mcp_client = MCPClient(
-    lambda: streamable_http_client(MSGRAPH_MCP_URL)
-)
-
-# Load tools from MCP servers
-try :
-    with streamable_http_mcp_client:
-        print("Hello")
-        msgraph_tools = streamable_http_mcp_client.list_tools_sync()
-        
-except Exception as e: 
-    print("Error entering MCP client:", e)
+# Initialize tools (eager loading for A2A server mode)
+msgraph_tools = get_mcp_tools()
 
 
 # -------------------------------------------------------------------
@@ -110,10 +126,65 @@ a2a_server = A2AServer(agent=agent, version="1.0.0")
 
 
 # -------------------------------------------------------------------
-# Start server
+# Bedrock AgentCore Runtime Entrypoint
 # -------------------------------------------------------------------
 
-if __name__ == "__main__":
+if AGENTCORE_AVAILABLE:
+    app = BedrockAgentCoreApp()
+
+    @app.entrypoint
+    def lambda_handler(event, context=None):
+        """
+        AWS Lambda handler for Bedrock AgentCore Runtime.
+
+        Args:
+            event: Lambda event containing the request payload
+                   Expected format: {"prompt": "user message", ...}
+            context: Lambda context object (optional)
+
+        Returns:
+            Agent response as a string or dict
+        """
+        try:
+            # Extract the prompt/message from the event
+            user_input = event.get("prompt") or event.get("message") or event.get("input", "")
+
+            if not user_input:
+                return {
+                    "error": "No input provided",
+                    "message": "Expected 'prompt', 'message', or 'input' in event"
+                }
+
+            # Log the invocation
+            print(f"AgentCore invocation - Input: {user_input[:100]}...")
+
+            # Invoke the agent
+            response = agent(user_input)
+
+            # Return the response
+            result = str(response)
+            print(f"AgentCore response - Output: {result[:100]}...")
+
+            return {
+                "response": result,
+                "status": "success"
+            }
+
+        except Exception as e:
+            error_msg = f"Error processing request: {str(e)}"
+            print(error_msg)
+            return {
+                "error": error_msg,
+                "status": "error"
+            }
+
+
+# -------------------------------------------------------------------
+# Start A2A Server (local development mode)
+# -------------------------------------------------------------------
+
+def start_a2a_server():
+    """Start the A2A server for local development."""
     host = os.getenv("A2A_HOST", "127.0.0.1")
     port = int(os.getenv("A2A_PORT", "9000"))
 
@@ -124,3 +195,15 @@ if __name__ == "__main__":
     print(f"Tools loaded: {len(all_tools)}\n")
 
     a2a_server.serve(host=host, port=port)
+
+
+if __name__ == "__main__":
+    # Determine mode based on environment variable
+    deployment_mode = os.getenv("DEPLOYMENT_MODE", "a2a").lower()
+
+    if deployment_mode == "agentcore" and AGENTCORE_AVAILABLE:
+        print("Starting in Bedrock AgentCore Runtime mode...")
+        app.run()
+    else:
+        print("Starting in A2A Server mode...")
+        start_a2a_server()

@@ -1,0 +1,43 @@
+# AWS Bedrock AgentCore Configuration
+# This file configures the deployment of the Action Agent to AWS Bedrock AgentCore Runtime
+
+# Agent Configuration
+agent:
+  name: "Action Agent"
+  description: "Identity & Access Management agent using PingOne and Microsoft Graph"
+  version: "1.0.0"
+
+# Runtime Configuration
+runtime:
+  entrypoint: "action_agent.py"
+  handler: "lambda_handler"
+  python_version: "3.11"
+
+# Environment Variables
+environment:
+  MSGRAPH_MCP_URL: "${MSGRAPH_MCP_URL}"
+  DEPLOYMENT_MODE: "agentcore"
+
+# Memory Configuration (optional)
+memory:
+  size_mb: 512
+  timeout_seconds: 300
+
+# IAM Permissions (if needed for AWS services)
+permissions:
+  - service: "bedrock"
+    actions:
+      - "bedrock:InvokeModel"
+  - service: "logs"
+    actions:
+      - "logs:CreateLogGroup"
+      - "logs:CreateLogStream"
+      - "logs:PutLogEvents"
+
+# VPC Configuration (optional, if MCP servers are in VPC)
+# vpc:
+#   security_groups:
+#     - sg-xxxxx
+#   subnets:
+#     - subnet-xxxxx
+#     - subnet-yyyyy
