@@ -50,7 +50,7 @@ def validate_request(request_type: str, data: dict) -> dict:
 # MCP client setup
 # -------------------------------------------------------------------
 
-#PINGONE_MCP_URL = os.getenv("PINGONE_MCP_URL")
+PINGONE_MCP_URL = os.getenv("PINGONE_MCP_URL", "http://localhost:8001/mcp")
 MSGRAPH_MCP_URL = "http://100.28.229.240:8000/mcp"
 
 if not MSGRAPH_MCP_URL:
@@ -58,9 +58,18 @@ if not MSGRAPH_MCP_URL:
         "MSGRAPH_MCP_URL must be set in environment"
     )
 
+if not PINGONE_MCP_URL:
+    raise RuntimeError(
+        "PINGONE_MCP_URL must be set in environment"
+    )
 
-# Create MCP client with HTTP transport
-streamable_http_mcp_client = MCPClient(
+
+# Create MCP clients with HTTP transport
+pingone_mcp_client = MCPClient(
+    lambda: streamable_http_client(PINGONE_MCP_URL)
+)
+
+msgraph_mcp_client = MCPClient(
     lambda: streamable_http_client(MSGRAPH_MCP_URL)
 )
 
@@ -77,31 +86,37 @@ a2a_server = None
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Manage MCP client lifecycle - keep session open while app runs."""
+    """Manage MCP client lifecycle - keep sessions open while app runs."""
     global agent, a2a_server
 
-    print("Starting MCP client session...")
+    print("Starting MCP client sessions...")
 
-    # Enter the MCP client context and keep it open
-    streamable_http_mcp_client.__enter__()
+    # Enter both MCP client contexts and keep them open
+    pingone_mcp_client.__enter__()
+    msgraph_mcp_client.__enter__()
 
     try:
-        print("MCP client session started successfully")
+        print("MCP client sessions started successfully")
 
-        # Load tools from MCP server (now that session is active)
-        msgraph_tools = streamable_http_mcp_client.list_tools_sync()
+        # Load tools from both MCP servers (now that sessions are active)
+        pingone_tools = pingone_mcp_client.list_tools_sync()
+        msgraph_tools = msgraph_mcp_client.list_tools_sync()
 
         all_tools = [
             log_action,
             validate_request,
+            *pingone_tools,
             *msgraph_tools,
         ]
 
-        print(f"Loaded {len(all_tools)} tools: {[t.name if hasattr(t, 'name') else str(t) for t in all_tools]}")
+        print(f"Loaded {len(all_tools)} tools total:")
+        print(f"  - PingOne: {len(pingone_tools)} tools")
+        print(f"  - Microsoft Graph: {len(msgraph_tools)} tools")
+        print(f"  - Helper tools: 2 (log_action, validate_request)")
 
         runtime_url = os.environ.get('AGENTCORE_RUNTIME_URL', 'http://127.0.0.1:9000/')
 
-        # Create agent with MCP tools
+        # Create agent with MCP tools from both servers
         agent = Agent(
             name="Action Agent",
             description="Executes identity & access operations via PingOne and Microsoft Graph",
@@ -124,13 +139,14 @@ async def lifespan(app: FastAPI):
         # Mount the A2A server routes
         app.mount("/", a2a_server.to_fastapi_app())
 
-        print("Action Agent ready and MCP client session active")
+        print("Action Agent ready with both MCP client sessions active")
 
-        yield  # App runs here with MCP client active
+        yield  # App runs here with both MCP clients active
     finally:
-        print("Shutting down MCP client session...")
-        streamable_http_mcp_client.__exit__(None, None, None)
-        print("MCP client session closed")
+        print("Shutting down MCP client sessions...")
+        msgraph_mcp_client.__exit__(None, None, None)
+        pingone_mcp_client.__exit__(None, None, None)
+        print("MCP client sessions closed")
 
 
 # -------------------------------------------------------------------
